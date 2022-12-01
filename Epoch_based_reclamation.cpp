@@ -1,4 +1,4 @@
-#include "Epoch_based_relcamation.hpp"
+#include "Epoch_based_reclamation.hpp"
 void MemManager::register_thread(int num) { self = new ThreadContext(this); }
 void MemManager::unregister_thread() { /* no-op */ }
 void MemManager::op_begin() { self->counter++; }
