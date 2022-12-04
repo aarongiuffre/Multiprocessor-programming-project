@@ -44,25 +44,19 @@ class LFskiplist {
 		bool insert(T key) {
 			SkipListNode<T> *node;
 			SkipListNode<T> *update[max_level];
-			
-			// Find matching position
-			node = _find(key, update);
 
+			node = _find(key, update);
 			int level = random_level();
 			SkipListNode<T> *new_node = new SkipListNode<T>(key, level);
-
 			if (level > skiplist_level) {
 				for (int i = skiplist_level; i < level; i ++ ) {
 					update[i] = header;
 				}
 			}
-
-			// Insert new Node to Skip List
 			for (int i = 0; i < level; i ++ ) {
 				new_node->next_list[i] = update[i]->next_list[i];
 				update[i]->next_list[i] = new_node;
 			}
-
 			length ++;
 			return true;
 		}
@@ -70,31 +64,24 @@ class LFskiplist {
 		bool remove(T key) {
 			SkipListNode<T> *node;
 			SkipListNode<T> *update[max_level];
-
 			node = _find(key, update);
-
 			if (node == NULL || node->next_list[0] == NULL) {
 				return false;
 			}
-
 			if (node->next_list[0]->value == key) {
 				
 				SkipListNode<T> *update[max_level];
 				for (int i = 0; i < node->level; i ++ ) {
 					update[i] = node->next_list[i];
 				}
-
 				delete node;
-
 				while (skiplist_level > 1 && 
 					header->next_list[skiplist_level - 1]) {
 					skiplist_level --;
 				}
-
 				length --;
 				return true;
 			}
-
 			return false;
 		}
 
