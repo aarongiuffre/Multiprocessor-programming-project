@@ -54,6 +54,7 @@
         "random": "cpp",
         "__split_buffer": "cpp",
         "numeric": "cpp",
-        "vector": "cpp"
+        "vector": "cpp",
+        "thread": "cpp"
     },
 }

@@ -1,87 +1,115 @@
-#include "LFskiplist.hpp"
-#include <thread>
-#include <ctime> 
-#include <chrono> 
+#include "LFskiplist.h"
 
-constexpr int THREAD_COUNT = 4;
-constexpr int ROUNDS = 10;
-constexpr int ITERATIONS = 100;
-std::atomic<int> id(0);
-std::atomic<int> deletion_count(0);
-
-int create_id()
-{
-    return id++;
+template <typename T>
+bool LFskiplist<T>::insert(T key, MemManager *mm) {
+		SkipListNode<T> *node;
+		SkipListNode<T> *update[max_level];
+		mm->op_begin();
+		node = _find(key, update);
+		int level = random_level();
+		SkipListNode<T> *new_node = new SkipListNode<T>(key, level);
+			if (level > skiplist_level) {
+				for (int i = skiplist_level; i < level; i ++ ) {
+					update[i] = header;
+				}
+			}
+			for (int i = 0; i < level; i ++ ) {
+				new_node->next_list[i] = update[i]->next_list[i];
+				update[i]->next_list[i] = new_node;
+			}
+			length ++;
+			mm->op_end();
+			return true;
 };
 
-void runInsert(LFskiplist<int> &l,MemManager &mm)
-{
-    for (auto j = 0; j != ITERATIONS; ++j)
-    {
-        l.insert(j,&mm);
-        std::cout<<"suc insert"<<std::endl;
-    }
+template <typename T>
+bool LFskiplist<T>::remove(T key,MemManager *mm) {
+			SkipListNode<T> *node;
+			SkipListNode<T> *update[max_level];
+			mm->op_begin();
+			node = _find(key, update);
+			if (node == NULL || node->next_list[0] == NULL) {
+				mm->op_end();
+				return false;
+			}
+			if (node->next_list[0]->value == key) {
+				
+				SkipListNode<T> *update[max_level];
+				for (int i = 0; i < node->level; i ++ ) {
+					update[i] = node->next_list[i];
+				}
+				
+				while (skiplist_level > 1 && 
+					header->next_list[skiplist_level - 1]) {
+					skiplist_level --;
+				}
+				mm->sched_for_reclaim(node);
+				length --;
+				mm->op_end();
+				return true;
+			}
+
+			return false;
 };
 
-void runRemove(LFskiplist<int> &l,MemManager &mm)
-{
-    for (auto j = 0; j != ITERATIONS * ITERATIONS; ++j)
-    {
-        if (l.remove(j, &mm))
-        {
-            deletion_count++;
-            std::cout<<"suc delete"<<std::endl;
-    
-        }
-    }
-}
+template <typename T>
+bool LFskiplist<T>::find(double key) {
+		SkipListNode<T> *node = _find(key);
 
+			if (node == NULL || node->next_list[0] == NULL) {
+				return false;
+			}
 
-void run_threaded_test()
-{
-    for (auto x = 0; x != ROUNDS; ++x)
-    {
-        LFskiplist<int> l ;
-        MemManager mm;
-        mm.register_thread(2);
-        std::thread totaladd[THREAD_COUNT];
-        std::thread totalremove[THREAD_COUNT];
+			if (node->next_list[0]->value == key) {
+				return true;
+			}
+			return false;
+};
 
-        //id.store(0);
+template <typename T>
+SkipListNode<T>* LFskiplist<T>::_find(T key) {
+			SkipListNode<T> *node = LFskiplist<T>::header;
 
-        for (auto i = 0; i != THREAD_COUNT; ++i)
-        {
-            totaladd[i] = std::thread(runInsert, std::ref(l),std::ref(mm));
-           
-        }
-        for (auto i = 0; i != THREAD_COUNT; ++i)
-        {
-         totalremove[i] = std::thread(runRemove, std::ref(l),std::ref(mm));
-        }
-        for (auto i = 0; i != THREAD_COUNT; ++i)
-        {
-            totaladd[i].join();
-            totalremove[i].join();
-        }
+			for (int i = LFskiplist<T>::skiplist_level - 1; i >= 0; i -- ) {
+				while (node->next_list[i] && node->next_list[i]->value < key) {
+					node = node->next_list[i];
+				}
+			}
 
+			return node;
+};
 
-        int size = l.length;
-        std::cout << "Size: " << size << std::endl;
-        std::cout << "Insertions: " << THREAD_COUNT * ITERATIONS << std::endl;
-        std::cout << "Deletions: " << deletion_count << std::endl;
-        //assert(size == ((THREAD_COUNT * ITERATIONS) - deletion_count));
-        
-    }
-}
+template <typename T>	
+SkipListNode<T>* LFskiplist<T>::_find(T key, SkipListNode<T> **update) {
+			SkipListNode<T> *node = LFskiplist<T>::header;
 
-int main(){
-    
-    auto start = std::chrono::high_resolution_clock::now();
-    run_threaded_test();
-    auto stop = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
-    std::cout << duration.count() << std::endl;
-    
-    
-    return 0;
-}
+			for (int i = LFskiplist<T>::skiplist_level - 1; i >= 0; i -- ) {
+				while (node->next_list[i] && node->next_list[i]->value < key) {
+					node = node->next_list[i];
+				}
+				update[i] = node;
+			}
+
+			return node;
+};
+	
+template <typename T>	
+int LFskiplist<T>::random_level() {
+			int num = 1;
+			while (gen_random() % 128 < 64) {
+				num ++;
+			}
+			return num < max_level ? num : max_level;
+};
+
+template <typename T>	
+void LFskiplist<T>::_print() {
+			for (int i = 0; i < skiplist_level; i ++ ) {
+				SkipListNode<T> *tmp = header->next_list[i];
+				while(tmp) {
+					std::cout << tmp->value << " ";
+					tmp = tmp->next_list[i];
+				}
+				printf("\n");
+			}
+	}

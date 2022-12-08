@@ -12,7 +12,8 @@ struct ThreadContext {
 
 struct MemManager {
     int wait_time = 1000000;
-    static thread_local ThreadContext *self;
+    ThreadContext *self;
+    //static thread_local ThreadContext *self;
     std::atomic<ThreadContext*> head;
     void register_thread(int num);
     void unregister_thread();
