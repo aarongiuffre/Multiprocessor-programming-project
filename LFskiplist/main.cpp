@@ -2,6 +2,7 @@
 #include <thread>
 #include <ctime> 
 #include <chrono> 
+#include "natarajanTree.hpp"
 
 constexpr int THREAD_COUNT = 4;
 constexpr int ROUNDS = 10;
@@ -81,6 +82,12 @@ int main(){
     auto stop = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
     std::cout << duration.count() << std::endl;
+    */
+
+    /*natarajan
+    
+    struct SeekRecord* seekRecord = (SeekRecord*)malloc(sizeof(SeekRecord));
+
     */
     
     run_threaded_test();
