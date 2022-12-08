@@ -1,6 +1,7 @@
 #include <iostream>
 #include <random>
-
+#include <cstdlib>
+#include "Epoch_based_reclamation.hpp"
 
 const static int max_level = 16;
 
@@ -41,7 +42,7 @@ class LFskiplist {
 			}
 		}
 
-		bool insert(T key) {
+		bool insert(T key, MemManager *mm) {
 			SkipListNode<T> *node;
 			SkipListNode<T> *update[max_level];
 
@@ -61,11 +62,13 @@ class LFskiplist {
 			return true;
 		}
 
-		bool remove(T key) {
+		bool remove(T key,MemManager *mm) {
+			mm->op_begin();
 			SkipListNode<T> *node;
 			SkipListNode<T> *update[max_level];
 			node = _find(key, update);
 			if (node == NULL || node->next_list[0] == NULL) {
+				mm->op_end();
 				return false;
 			}
 			if (node->next_list[0]->value == key) {
@@ -74,14 +77,17 @@ class LFskiplist {
 				for (int i = 0; i < node->level; i ++ ) {
 					update[i] = node->next_list[i];
 				}
-				delete node;
+				
 				while (skiplist_level > 1 && 
 					header->next_list[skiplist_level - 1]) {
 					skiplist_level --;
 				}
+				mm->sched_for_reclaim(node);
 				length --;
+				mm->op_end();
 				return true;
 			}
+			mm->op_end();
 			return false;
 		}
 
@@ -95,7 +101,6 @@ class LFskiplist {
 			if (node->next_list[0]->value == key) {
 				return true;
 			}
-
 			return false;
 		}		
 
@@ -112,7 +117,7 @@ class LFskiplist {
 
 			return node;
 		}
-
+		
 		SkipListNode<T> *_find(T key, SkipListNode<T> **update) {
 			SkipListNode<T> *node = header;
 
@@ -125,7 +130,7 @@ class LFskiplist {
 
 			return node;
 		}
-
+	
 		int random_level() {
 			int num = 1;
 			while (gen_random() % 128 < 64) {
