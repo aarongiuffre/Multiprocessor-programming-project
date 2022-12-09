@@ -1,12 +1,12 @@
 #include <iostream> 
 #include <stdlib.h>
 #include <bits/stdc++.h>
+#include <atomic>
 
-template <typename T>
 struct Node {
-    T key;
-    atomic<FlagTagRef<T>> left;
-    atomic<FlagTagRef<T>> right;
+    int key;
+    std::atomic<FlagTagRef>* left;
+    std::atomic<FlagTagRef>* right;
 };
 
 struct SeekRecord {
@@ -16,19 +16,14 @@ struct SeekRecord {
     struct Node* leaf;
 };
 
-template <typename T>
-void seek(T key, SeekRecord* seekRecord);
+struct SeekRecord* seekRecord = (SeekRecord*)malloc(sizeof(SeekRecord));
 
-template <typename T>
-bool search(T key, SeekRecord* seekRecord);
+void seek(int key, SeekRecord* seekRecord);
 
-template <typename T>
-bool insert(T key);
+bool search(int key, SeekRecord* seekRecord);
 
-template <typename T>
-bool deleteKey(T key);
+bool insert(int key);
 
-template <typename T>
-bool cleanup(T key, SeekRecord* seekRecord);
+bool deleteKey(int key);
 
-void initTree(void);
+bool cleanup(int key, SeekRecord* seekRecord);
