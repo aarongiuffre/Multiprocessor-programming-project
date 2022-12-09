@@ -1,8 +1,9 @@
 #include "LFskiplist.cpp"
+#include "natarajanTree.hpp"
 #include <thread>
 #include <ctime> 
 #include <chrono> 
-#include "natarajanTree.hpp"
+
 
 constexpr int THREAD_COUNT = 4;
 constexpr int ROUNDS = 10;

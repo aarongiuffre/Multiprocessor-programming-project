@@ -2,6 +2,7 @@
 #include <random>
 #include <cstdlib>
 #include "ebr.hpp"
+#include "ebr_textbook.hpp"
 
 const static int max_level = 16;
 

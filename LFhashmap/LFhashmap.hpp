@@ -198,8 +198,6 @@ class LockFreeHashSet {
 };
 
 BucketList LockFreeHashSet::getBucketList(int myBucket) {
-    std::cout<<"bucket[myBucket].head.key:"<<bucket[myBucket].head.key<<std::endl;
-    std::cout<<"&bucket[myBucket]"<<&bucket[myBucket]<<std::endl;
     if (&bucket[myBucket] == nullptr)
         initializeBucket(myBucket); 
     return bucket[myBucket];

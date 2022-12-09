@@ -1,71 +1,333 @@
-#include <vector>
-#include <iostream>
+/*
+#include <cassert>
+#include <mutex>
+#include <list>
+#include <atomic>
+#include <pthread.h>
+#include <stdexcept>
+#include <thread>
 
-struct MemManager;
 
-struct ThreadContext {
-    std::vector<void*> pending_reclaims;
-    std::atomic<uint64_t> counter;
-    ThreadContext *next;
-    ThreadContext(MemManager *m);
+
+namespace ebr {
+
+struct EBRThreadData {
+    std::atomic_uint64_t ts;
+    std::atomic_bool active;
+
+    std::list<void*> freeLists[3] = {};
+    uint64_t epoch[3] = {};
+    int workingOn = 4;
 };
 
-struct MemManager {
-    int wait_time = 1000000;
-    ThreadContext *self;
-    //static thread_local ThreadContext *self;
-    std::atomic<ThreadContext*> head;
-    void register_thread(int num);
-    void unregister_thread();
-    void op_begin();
-    void sched_for_reclaim(void* ptr);
-    bool try_reserve(void* ptr);
-    void unreserve(void* ptr);
-    void op_end();
-    void wait_until_unreserved();
-};
+template<typename T>
+void destructor(void* x) {
+    delete reinterpret_cast<T*>(x);
+}
 
-ThreadContext::ThreadContext(MemManager *m) {
-  while (true) {
-    next = m->head;
-    if (m->head.compare_exchange_strong(next, this))
-         break;
-     }
- };
-
-bool odd(uint64_t val)
-{
-    if (val%2==1){
-        return true;
+template<typename T>
+class ThreadSpecificData {
+public:
+    explicit ThreadSpecificData() {
+        void (*fn)(void*) = destructor<T>;
+        if(pthread_key_create(&key, fn) < 0) {
+            perror("Error on pthread_key_create");
+            throw std::runtime_error("Error on pthread_key_create");
+        }
     }
-    else{
-        return false;
+    ~ThreadSpecificData() {}
+
+    void set(T* x) {
+        if(pthread_setspecific(key, reinterpret_cast<void*>(x)) != 0) {
+            perror("Error on pthread_setspecific");
+            throw std::runtime_error("Error on pthread_setspecific");
+        }
     }
+
+    T* get() {
+        T* x = reinterpret_cast<T*>(pthread_getspecific(key));
+        return x;
+    }
+private:
+    pthread_key_t key;
 };
 
-void MemManager::register_thread(int num) { self = new ThreadContext(this); }
-void MemManager::unregister_thread() {  }
-void MemManager::op_begin() { self->counter++; }
-void MemManager::sched_for_reclaim(void* ptr) { self->pending_reclaims.push_back(ptr); }
-bool MemManager::try_reserve(void* ptr) { return false; }
-void MemManager::unreserve(void* ptr) { }
+template<typename T, typename Destructor>
+struct EBR {
+public:
 
-void MemManager::op_end() {
- self->counter++;
- if (self->pending_reclaims.size() == 0)
-    return;
- wait_until_unreserved();
- for (auto p : self->pending_reclaims) free(p);
+    EBR() : gts{0}, threadList{} {}
+    
+    ~EBR() {}
+
+    void registerThread() {
+        if(key.get() == nullptr) {
+            auto data = new EBRThreadData();
+            data->active = false;
+            key.set(data);
+            std::unique_lock<std::mutex> lg(listGuard);
+            threadList.push_front(data);
+        }
+    }
+
+    void start() {
+        auto data = key.get();
+        //assert(data->workingOn == 4);
+        int clean;
+        clean = this->getClean();
+        while(clean == 4) {
+            std::this_thread::yield();
+            clean = this->getClean();
+        }
+        data->workingOn = clean;
+        data->ts = gts.load(std::memory_order_relaxed);
+        data->active.store(true, std::memory_order_seq_cst);
+    }
+
+    void free(T* x) {
+        auto data = key.get();
+        int workingOn = data->workingOn;
+        assert(workingOn != 4);
+        data->freeLists[workingOn].push_front(x);
+    }
+
+    void end() {
+        auto data = key.get();
+        data->workingOn = 4;
+        data->active.store(false, std::memory_order_seq_cst);
+    }
+
+private:
+
+    int getClean() {
+
+        auto data = key.get();
+
+        auto canFree = fts.load();
+        auto threadMinEpoch = data->epoch[0];
+        
+        for(int i = 1; i < 3; i++) {
+            if(canFree >= data->epoch[i]) {
+                for(auto& elm : data->freeLists[i]) {
+                    Destructor{}(reinterpret_cast<T*>(elm)); 
+                }
+                data->freeLists[i] = {};
+                return i;
+            }
+            if(threadMinEpoch > data->epoch[i]) {
+                threadMinEpoch = data->epoch[i];
+            }
+        }
+
+        std::unique_lock<std::mutex> lg(listGuard);
+        
+        canFree = fts.load();
+        
+        if(threadMinEpoch <= canFree) {
+            int i = freeWhatYouCan(canFree, data);
+            if(i < 4) return i; 
+        }
+
+
+        auto startGts = gts.load();
+        uint64_t min = startGts - 1;
+        bool set = false;
+        for(auto& e : threadList) {
+            if(e->active) {
+                auto ts = e->ts.load();
+                if(!set) {
+                    min = ts;
+                    set = true;
+                } else if(ts < min) {
+                    min = ts;
+                }
+            }
+        }
+
+        fts.store(min - 2);  // we can free min - 2 and less
+        gts++;
+        lg.unlock();
+
+        canFree = min - 2;
+        if(threadMinEpoch <= canFree) {
+            int i = freeWhatYouCan(canFree, data);
+            if(i < 4) return i;
+        }
+        return 4;
+    }
+
+    inline int freeWhatYouCan(uint64_t canFree, EBRThreadData* data) {
+        for(int i = 1; i < 3; i++) {
+            if(canFree >= data->epoch[i]) {
+                for(auto& elm : data->freeLists[i]) {
+                    Destructor{}(reinterpret_cast<T*>(elm)); 
+                }
+                data->freeLists[i] = {};
+                return i;
+            }
+        }
+        return 4;
+    }
+
+
+    /// Global time stamp
+    std::atomic_uint64_t gts;
+    /// Free time stamp
+    std::atomic_uint64_t fts;
+    std::mutex listGuard; 
+    std::list<EBRThreadData*> threadList;
+    ThreadSpecificData<EBRThreadData> key;
 };
 
-void MemManager::wait_until_unreserved() {
-ThreadContext* curr = head;
- while (curr) {
-    uint64_t val = curr->counter;
-    if (odd(val))
-     do {
-         wait(&wait_time);
-         } while (curr->counter.load() == val);
-    curr = curr->next;
+};
+*/
+#include <cassert>
+#include <mutex>
+#include <list>
+#include <atomic>
+#include <pthread.h>
+#include <stdexcept>
+#include <thread>
+
+
+
+namespace ebr {
+
+struct EBRThreadData {
+    std::atomic_uint64_t ts;
+    std::atomic_bool active;
+
+    std::list<void*> freeLists[3] = {};
+    uint64_t epoch[3] = {};
+    int workingOn = 4;
+};
+
+
+template<typename T>
+struct EBR {
+public:
+
+    EBR() : gts{0}, threadList{} {}
+    
+    ~EBR() {}
+
+    void registerThread() {
+        if(key->workingOn !=4) {
+            auto data = new EBRThreadData();
+            data->active = false;
+            key = data;
+            std::unique_lock<std::mutex> lg(listGuard);
+            threadList.push_front(data);
+        }
     }
+
+    void start() {
+        auto data = key;
+        //assert(data->workingOn == 4);
+        int clean;
+        clean = this->getClean();
+        while(clean == 4) {
+            std::this_thread::yield();
+            clean = this->getClean();
+        }
+        data->workingOn = clean;
+        data->ts = gts.load(std::memory_order_relaxed);
+        data->active.store(true, std::memory_order_seq_cst);
+    }
+
+    void free(T* x) {
+        auto data = key;
+        int workingOn = data->workingOn;
+        assert(workingOn != 4);
+        data->freeLists[workingOn].push_front(x);
+    }
+
+    void end() {
+        auto data = key;
+        data->workingOn = 4;
+        data->active.store(false, std::memory_order_seq_cst);
+    }
+
+private:
+
+    int getClean() {
+
+        auto data = key;
+
+        auto canFree = fts.load();
+        auto threadMinEpoch = data->epoch[0];
+        
+        for(int i = 1; i < 3; i++) {
+            if(canFree >= data->epoch[i]) {
+                for(auto& elm : data->freeLists[i]) {
+                    delete(reinterpret_cast<T*>(elm)); 
+                }
+                data->freeLists[i] = {};
+                return i;
+            }
+            if(threadMinEpoch > data->epoch[i]) {
+                threadMinEpoch = data->epoch[i];
+            }
+        }
+
+        std::unique_lock<std::mutex> lg(listGuard);
+        
+        canFree = fts.load();
+        
+        if(threadMinEpoch <= canFree) {
+            int i = freeWhatYouCan(canFree, data);
+            if(i < 4) return i; 
+        }
+
+
+        auto startGts = gts.load();
+        uint64_t min = startGts - 1;
+        bool set = false;
+        for(auto& e : threadList) {
+            if(e->active) {
+                auto ts = e->ts.load();
+                if(!set) {
+                    min = ts;
+                    set = true;
+                } else if(ts < min) {
+                    min = ts;
+                }
+            }
+        }
+
+        fts.store(min - 2);  
+        gts++;
+        lg.unlock();
+
+        canFree = min - 2;
+        if(threadMinEpoch <= canFree) {
+            int i = freeWhatYouCan(canFree, data);
+            if(i < 4) return i;
+        }
+        return 4;
+    }
+
+    inline int freeWhatYouCan(uint64_t canFree, EBRThreadData* data) {
+        for(int i = 1; i < 3; i++) {
+            if(canFree >= data->epoch[i]) {
+                for(auto& elm : data->freeLists[i]) {
+                    delete(reinterpret_cast<T*>(elm)); 
+                }
+                data->freeLists[i] = {};
+                return i;
+            }
+        }
+        return 4;
+    }
+
+
+    /// Global time stamp
+    std::atomic_uint64_t gts;
+    /// Free time stamp
+    std::atomic_uint64_t fts;
+    std::mutex listGuard; 
+    std::list<EBRThreadData*> threadList;
+    EBRThreadData* key;
+};
+
 };
